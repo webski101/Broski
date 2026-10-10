@@ -1,0 +1,21 @@
+# Broski — ArmorIQ project config
+# Register agent + MCP on https://platform.armoriq.ai before demoing.
+
+identity:
+  user_id: ${USER_ID}
+  agent_id: ${AGENT_ID}
+  context_id: ${CONTEXT_ID}
+
+environment: ${ARMORIQ_ENV}
+
+mcp_servers:
+  - name: broski-invoice-mcp
+    description: Sandbox AP invoices and payments for Broski (no real money)
+    transport: stdio
+    command: npm
+    args: ["run", "mcp"]
+
+policy:
+  notes: >
+    Mandate-bound AP agent. Allowed tools are declared in the signed plan.
+    wire_transfer and add_payee must remain outside the default mandate.
