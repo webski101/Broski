@@ -1,11 +1,16 @@
 import { randomUUID } from "crypto";
 import {
   IntentMismatchException,
+  MCPInvocationException,
   PolicyBlockedException,
   PolicyHoldException,
-  type ToolCall,
+  type IntentToken,
 } from "@armoriq/sdk";
-import { BROSKI_MCP, createArmorIQClient, isArmorIQConfigured } from "@/lib/armoriq";
+import {
+  BROSKI_MCP,
+  createArmorIQClient,
+  isArmorIQConfigured,
+} from "@/lib/armoriq";
 import { resetSandbox } from "@/lib/sandbox/invoices";
 import { buildMandatePlanSteps, scenarioSteps } from "./mandate";
 import { executeSandboxTool } from "./tools";
@@ -16,15 +21,6 @@ import type {
   ScenarioId,
   VerdictEvent,
 } from "./types";
-
-function toToolCalls(
-  steps: Array<{ tool: string; args: Record<string, unknown> }>,
-): ToolCall[] {
-  return steps.map((step) => ({
-    name: `${BROSKI_MCP}.${step.tool}`,
-    args: step.args,
-  }));
-}
 
 function eventBase(
   step: RunStepRequest,
@@ -45,6 +41,133 @@ function eventBase(
   };
 }
 
+function planAllowsCall(
+  planSteps: Array<{ tool: string; args: Record<string, unknown> }>,
+  tool: string,
+  args: Record<string, unknown>,
+) {
+  return planSteps.some((step) => {
+    if (step.tool !== tool) return false;
+    const declared = step.args ?? {};
+    const declaredKeys = Object.keys(declared);
+    if (declaredKeys.length === 0) return true;
+    return declaredKeys.every(
+      (key) => JSON.stringify(declared[key]) === JSON.stringify(args[key]),
+    );
+  });
+}
+
+function mapArmorIQError(step: RunStepRequest, error: unknown): VerdictEvent {
+  if (error instanceof IntentMismatchException) {
+    return eventBase(
+      step,
+      "block",
+      error.message ||
+        `ArmorIQ intent mismatch: ${step.tool} is outside the signed Broski mandate.`,
+    );
+  }
+  if (error instanceof PolicyBlockedException) {
+    return eventBase(
+      step,
+      "block",
+      error.reason || error.message || "ArmorIQ policy blocked this action.",
+    );
+  }
+  if (error instanceof PolicyHoldException) {
+    return eventBase(
+      step,
+      "hold",
+      error.message || "ArmorIQ held this action for approval.",
+      error.delegationContext,
+    );
+  }
+  if (error instanceof MCPInvocationException) {
+    return eventBase(
+      step,
+      "error",
+      error.message || "ArmorIQ MCP invocation failed.",
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return eventBase(step, "error", message);
+}
+
+async function runStepThroughArmorIQ(input: {
+  client: ReturnType<typeof createArmorIQClient>;
+  token: IntentToken;
+  step: RunStepRequest;
+  planSteps: Array<{ tool: string; args: Record<string, unknown> }>;
+  userEmail: string;
+}): Promise<VerdictEvent> {
+  const { client, token, step, planSteps, userEmail } = input;
+  const args = step.args ?? {};
+
+  try {
+    const result = await client.invoke(
+      BROSKI_MCP,
+      step.tool,
+      token,
+      args,
+      undefined,
+      userEmail,
+    );
+    return eventBase(
+      step,
+      "allow",
+      "ArmorIQ verified the signed intent and completed the MCP invoke.",
+      result,
+    );
+  } catch (error) {
+    if (error instanceof IntentMismatchException) {
+      return eventBase(
+        step,
+        "block",
+        error.message ||
+          `ArmorIQ blocked ${step.tool} — outside the signed Broski mandate.`,
+      );
+    }
+
+    if (error instanceof PolicyBlockedException) {
+      return eventBase(
+        step,
+        "block",
+        error.reason || error.message || "ArmorIQ policy blocked this action.",
+      );
+    }
+
+    if (error instanceof PolicyHoldException) {
+      return eventBase(
+        step,
+        "hold",
+        error.message || "ArmorIQ held this action for human approval.",
+        error.delegationContext,
+      );
+    }
+
+    if (error instanceof MCPInvocationException) {
+      // Intent action-name check passed client-side. Also bind against the exact
+      // signed plan params (invoice ids / amounts) from capturePlan().
+      if (!planAllowsCall(planSteps, step.tool, args)) {
+        return eventBase(
+          step,
+          "block",
+          "Blocked against the ArmorIQ-signed mandate plan — this tool call’s parameters were never declared (e.g. over-limit invoice).",
+        );
+      }
+
+      const result = await executeSandboxTool(step.tool, args);
+      return eventBase(
+        step,
+        "allow",
+        "ArmorIQ signed-intent check passed. Sandbox MCP ran locally because broski-invoice-mcp is not registered on the ArmorIQ proxy yet — onboard it on platform.armoriq.ai for full proxy routing.",
+        result,
+      );
+    }
+
+    return mapArmorIQError(step, error);
+  }
+}
+
 export async function runBroskiScenario(input: {
   mandate: MandateConfig;
   scenario: ScenarioId;
@@ -53,6 +176,9 @@ export async function runBroskiScenario(input: {
   const mandate = input.mandate;
   const planSteps = buildMandatePlanSteps(mandate);
   const steps = scenarioSteps(input.scenario, mandate);
+  const mode =
+    (process.env.ARMORIQ_SESSION_MODE as "sdk" | "local" | "proxy" | undefined) ||
+    "sdk";
 
   if (!isArmorIQConfigured()) {
     return {
@@ -64,7 +190,7 @@ export async function runBroskiScenario(input: {
       planGoal: mandate.goal,
       planSteps,
       events: [],
-      enforcementMode: "sdk",
+      enforcementMode: mode,
     };
   }
 
@@ -73,124 +199,33 @@ export async function runBroskiScenario(input: {
   }
 
   const client = createArmorIQClient();
-  const mode =
-    (process.env.ARMORIQ_SESSION_MODE as "sdk" | "local" | "proxy" | undefined) ||
-    "sdk";
+  const plan = {
+    goal: mandate.goal,
+    steps: planSteps.map((step) => ({
+      action: step.tool,
+      mcp: BROSKI_MCP,
+      params: step.args,
+    })),
+  };
 
-  const session = client.forUser(mandate.userEmail).startSession({
-    mode,
-    defaultMcpName: BROSKI_MCP,
-    llm: process.env.BROSKI_LLM || "gpt-4o-mini",
-    validitySeconds: 1800,
-  });
-
-  const toolCalls = toToolCalls(planSteps);
-  await session.startPlan(toolCalls, mandate.goal);
+  const captured = client.capturePlan(
+    process.env.BROSKI_LLM || "gpt-4o-mini",
+    mandate.goal,
+    plan,
+  );
+  const token = await client.getIntentToken(captured);
 
   const events: VerdictEvent[] = [];
-
   for (const step of steps) {
-    const toolName = `${BROSKI_MCP}.${step.tool}`;
-    const args = step.args ?? {};
-
-    try {
-      if (mode === "proxy") {
-        const dispatched = await session.dispatch(toolName, args);
-        events.push(
-          eventBase(
-            step,
-            "allow",
-            "ArmorIQ proxy verified intent and forwarded the MCP call.",
-            dispatched,
-          ),
-        );
-        continue;
-      }
-
-      const decision = await session.enforce(toolName, args);
-
-      if (decision.action === "block" || decision.allowed === false) {
-        events.push(
-          eventBase(
-            step,
-            "block",
-            decision.reason ||
-              decision.matchedPolicy ||
-              "ArmorIQ blocked this action against the signed mandate.",
-          ),
-        );
-        await session.report(toolName, args, {
-          blocked: true,
-          reason: decision.reason,
-        }, { status: "failed" });
-        continue;
-      }
-
-      if (decision.action === "hold") {
-        events.push(
-          eventBase(
-            step,
-            "hold",
-            decision.reason ||
-              "ArmorIQ held this action for human approval (delegation).",
-            { delegationId: decision.delegationId },
-          ),
-        );
-        await session.report(toolName, args, {
-          held: true,
-          delegationId: decision.delegationId,
-        }, { status: "failed" });
-        continue;
-      }
-
-      const result = await executeSandboxTool(step.tool, args);
-      await session.report(toolName, args, result, { status: "success" });
-      events.push(
-        eventBase(
-          step,
-          "allow",
-          decision.reason ||
-            "ArmorIQ allowed this action — it matches the signed mandate.",
-          result,
-        ),
-      );
-    } catch (error) {
-      if (error instanceof IntentMismatchException) {
-        events.push(
-          eventBase(
-            step,
-            "block",
-            error.message ||
-              `Intent mismatch: ${step.tool} is outside the signed Broski mandate.`,
-          ),
-        );
-        continue;
-      }
-      if (error instanceof PolicyBlockedException) {
-        events.push(
-          eventBase(
-            step,
-            "block",
-            error.reason || error.message || "Policy blocked by ArmorIQ.",
-          ),
-        );
-        continue;
-      }
-      if (error instanceof PolicyHoldException) {
-        events.push(
-          eventBase(
-            step,
-            "hold",
-            error.message || "ArmorIQ held action for approval.",
-            error.delegationContext,
-          ),
-        );
-        continue;
-      }
-
-      const message = error instanceof Error ? error.message : String(error);
-      events.push(eventBase(step, "error", message));
-    }
+    events.push(
+      await runStepThroughArmorIQ({
+        client,
+        token,
+        step,
+        planSteps,
+        userEmail: mandate.userEmail,
+      }),
+    );
   }
 
   return {
