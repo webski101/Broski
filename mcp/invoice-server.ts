@@ -2,7 +2,7 @@
  * Broski sandbox invoice MCP server (stdio).
  * Register the remote HTTP twin on ArmorIQ as:
  *   name: broski-invoice-mcp
- *   url:  https://broski-app.vercel.app/api/mcp
+ *   url:  https://temporary-speedy-flint-zx2cl72.vercel.app/api/mcp
  *
  * Tools are sandbox-only — no real money or customer data.
  */
