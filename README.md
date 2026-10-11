@@ -15,7 +15,7 @@ Built for ArmorIQ **Flow State** — AI agents, MCP, and intent enforcement.
 
 - Next.js + TypeScript + Tailwind + shadcn/ui
 - `@armoriq/sdk` for intent / policy enforcement
-- `broski-invoice-mcp` — sandbox invoice MCP (`npm run mcp`)
+- `broski-invoice-mcp` — sandbox invoice MCP (HTTP + stdio)
 
 ## Setup
 
@@ -25,12 +25,15 @@ cp .env.example .env.local
 npm install
 ```
 
-On [platform.armoriq.ai](https://platform.armoriq.ai):
+On [platform.armoriq.ai](https://platform.armoriq.ai) → **Add MCP server**:
 
-1. Create an API key
-2. Onboard agent `Broski` (`d7681f20-2ac7-49db-a8ae-7e1ede22f14b`)
-3. Onboard MCP `broski-invoice-mcp`
-4. Point policies at this agent (optional ArmorPay holds for over-limit pays)
+1. Method: **Remote endpoint**
+2. Server name: `broski-invoice-mcp`
+3. Server URL: `https://broski-app.vercel.app/api/mcp`
+4. Authentication: **None**
+5. Continue → secure / scan
+
+Also onboard agent `Broski` (`d7681f20-2ac7-49db-a8ae-7e1ede22f14b`).
 
 ## Run
 
@@ -39,9 +42,15 @@ On [platform.armoriq.ai](https://platform.armoriq.ai):
 npm run dev
 # → http://localhost:3847
 
-# MCP server (stdio) — register this with ArmorIQ / your agent host
+# MCP over HTTP (same tools as production)
+# → http://localhost:3847/api/mcp
+
+# MCP over stdio (local agent hosts)
 npm run mcp
 ```
+
+Live app: https://broski-app.vercel.app  
+Live MCP: https://broski-app.vercel.app/api/mcp
 
 ## Demo script (2 minutes)
 

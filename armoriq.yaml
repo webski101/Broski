@@ -11,9 +11,11 @@ environment: ${ARMORIQ_ENV}
 mcp_servers:
   - name: broski-invoice-mcp
     description: Sandbox AP invoices and payments for Broski (no real money)
-    transport: stdio
-    command: npm
-    args: ["run", "mcp"]
+    # Prefer remote HTTP for ArmorIQ platform onboarding:
+    #   https://broski-app.vercel.app/api/mcp
+    transport: http
+    url: https://broski-app.vercel.app/api/mcp
+    # Local stdio fallback: npm run mcp
 
 policy:
   notes: >
