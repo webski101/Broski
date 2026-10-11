@@ -185,7 +185,7 @@ export async function runBroskiScenario(input: {
       ok: false,
       configured: false,
       message:
-        "Add ARMORIQ_API_KEY from https://platform.armoriq.ai, then onboard agent `broski-ap-agent` and MCP `broski-invoice-mcp`. Broski will not invent ALLOW/BLOCK results.",
+        "Add ARMORIQ_API_KEY from https://platform.armoriq.ai, then onboard agent `Broski` and MCP `broski-invoice-mcp`. Broski will not invent ALLOW/BLOCK results.",
       mandate,
       planGoal: mandate.goal,
       planSteps,

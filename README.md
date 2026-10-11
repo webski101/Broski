@@ -28,7 +28,7 @@ npm install
 On [platform.armoriq.ai](https://platform.armoriq.ai):
 
 1. Create an API key
-2. Onboard agent `broski-ap-agent`
+2. Onboard agent `Broski` (`d7681f20-2ac7-49db-a8ae-7e1ede22f14b`)
 3. Onboard MCP `broski-invoice-mcp`
 4. Point policies at this agent (optional ArmorPay holds for over-limit pays)
 

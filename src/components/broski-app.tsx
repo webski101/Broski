@@ -75,7 +75,7 @@ export function BroskiApp() {
       .catch(() =>
         setStatus({
           configured: false,
-          agentId: "broski-ap-agent",
+          agentId: "Broski",
           mcp: "broski-invoice-mcp",
           platform: "https://platform.armoriq.ai",
           invoices: [],
@@ -152,7 +152,7 @@ export function BroskiApp() {
             <div className="flex justify-between gap-6">
               <span>agent</span>
               <span className="text-[var(--broski-ink)]">
-                {status?.agentId ?? "broski-ap-agent"}
+                {status?.agentId ?? "Broski"}
               </span>
             </div>
             <div className="flex justify-between gap-6">
@@ -176,7 +176,7 @@ export function BroskiApp() {
             >
               platform.armoriq.ai
             </a>
-            , onboard agent <code className="text-[var(--broski-ink)]">broski-ap-agent</code>{" "}
+            , onboard agent <code className="text-[var(--broski-ink)]">Broski</code>{" "}
             and MCP <code className="text-[var(--broski-ink)]">broski-invoice-mcp</code>.
             Broski never fakes enforcement.
           </div>

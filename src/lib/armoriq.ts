@@ -1,7 +1,8 @@
 import { ArmorIQClient } from "@armoriq/sdk";
 
 export const BROSKI_MCP = "broski-invoice-mcp";
-export const BROSKI_AGENT_ID = process.env.AGENT_ID || "broski-ap-agent";
+export const BROSKI_AGENT_ID =
+  process.env.AGENT_ID || "d7681f20-2ac7-49db-a8ae-7e1ede22f14b";
 
 export function isArmorIQConfigured() {
   return Boolean(process.env.ARMORIQ_API_KEY?.trim());
