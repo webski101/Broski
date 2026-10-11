@@ -29,9 +29,12 @@ On [platform.armoriq.ai](https://platform.armoriq.ai) → **Add MCP server**:
 
 1. Method: **Remote endpoint**
 2. Server name: `broski-invoice-mcp`
-3. Server URL: `https://broski-app.vercel.app/api/mcp`
+3. Server URL: `https://temporary-speedy-flint-zx2cl72.vercel.app/api/mcp`
 4. Authentication: **None**
 5. Continue → secure / scan
+
+Claim the Vercel deploy (keeps the URL alive):  
+https://vercel.com/claim-deployment?code=99364a7d-96e8-4b99-a13c-5a54780af1fe
 
 Also onboard agent `Broski` (`d7681f20-2ac7-49db-a8ae-7e1ede22f14b`).
 
@@ -49,8 +52,7 @@ npm run dev
 npm run mcp
 ```
 
-Live app: https://broski-app.vercel.app  
-Live MCP: https://broski-app.vercel.app/api/mcp
+Live MCP (Streamable HTTP): https://temporary-speedy-flint-zx2cl72.vercel.app/api/mcp
 
 ## Demo script (2 minutes)
 

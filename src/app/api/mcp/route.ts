@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import {
   createInvoiceMcpServer,
   MCP_NAME,
   MCP_VERSION,
 } from "@/lib/mcp/create-invoice-server";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +18,27 @@ const CORS_HEADERS: HeadersInit = {
     "Content-Type, Accept, mcp-session-id, Last-Event-ID, mcp-protocol-version",
   "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
 };
+
+type Session = {
+  transport: WebStandardStreamableHTTPServerTransport;
+  server: McpServer;
+  lastActive: number;
+};
+
+/** Best-effort in-memory sessions for ArmorIQ connect checks on a warm instance. */
+const sessions = new Map<string, Session>();
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+function pruneSessions() {
+  const cutoff = Date.now() - SESSION_TTL_MS;
+  for (const [id, session] of sessions) {
+    if (session.lastActive < cutoff) {
+      sessions.delete(id);
+      void session.transport.close().catch(() => undefined);
+      void session.server.close().catch(() => undefined);
+    }
+  }
+}
 
 function withCors(response: Response): Response {
   const headers = new Headers(response.headers);
@@ -28,21 +52,98 @@ function withCors(response: Response): Response {
   });
 }
 
+async function parseBody(req: Request): Promise<unknown> {
+  const text = await req.text();
+  if (!text) return undefined;
+  return JSON.parse(text) as unknown;
+}
+
+function looksLikeInitialize(body: unknown): boolean {
+  if (!body) return false;
+  if (Array.isArray(body)) return body.some((msg) => isInitializeRequest(msg));
+  return isInitializeRequest(body);
+}
+
 async function handleMcp(req: Request): Promise<Response> {
-  // Stateless + JSON responses — works on Vercel serverless (no sticky SSE).
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  const server = createInvoiceMcpServer();
-  await server.connect(transport);
+  pruneSessions();
+
+  const sessionHeader = req.headers.get("mcp-session-id");
+  let body: unknown;
   try {
-    const response = await transport.handleRequest(req);
-    return withCors(response);
-  } finally {
-    await transport.close().catch(() => undefined);
-    await server.close().catch(() => undefined);
+    if (req.method === "POST") {
+      body = await parseBody(req);
+    }
+  } catch {
+    return withCors(
+      Response.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32700, message: "Parse error: Invalid JSON" },
+          id: null,
+        },
+        { status: 400 },
+      ),
+    );
   }
+
+  let session = sessionHeader ? sessions.get(sessionHeader) : undefined;
+
+  if (session) {
+    session.lastActive = Date.now();
+    const response = await session.transport.handleRequest(req, {
+      parsedBody: body,
+    });
+    return withCors(response);
+  }
+
+  if (sessionHeader) {
+    return withCors(
+      Response.json(
+        {
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "Session not found" },
+          id: null,
+        },
+        { status: 404 },
+      ),
+    );
+  }
+
+  if (req.method === "POST" && looksLikeInitialize(body)) {
+    const server = createInvoiceMcpServer();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (sessionId) => {
+        sessions.set(sessionId, {
+          transport,
+          server,
+          lastActive: Date.now(),
+        });
+      },
+    });
+    transport.onclose = () => {
+      const sid = transport.sessionId;
+      if (sid) sessions.delete(sid);
+    };
+    await server.connect(transport);
+    const response = await transport.handleRequest(req, { parsedBody: body });
+    return withCors(response);
+  }
+
+  return withCors(
+    Response.json(
+      {
+        jsonrpc: "2.0",
+        error: {
+          code: -32000,
+          message: "Bad Request: No valid session ID provided",
+        },
+        id: null,
+      },
+      { status: 400 },
+    ),
+  );
 }
 
 export async function OPTIONS() {
@@ -52,7 +153,10 @@ export async function OPTIONS() {
 /** Discovery / health for humans hitting the URL in a browser. */
 export async function GET(req: Request) {
   const accept = req.headers.get("accept") ?? "";
-  if (accept.includes("text/event-stream") || accept.includes("application/json")) {
+  if (
+    accept.includes("text/event-stream") ||
+    req.headers.get("mcp-session-id")
+  ) {
     return handleMcp(req);
   }
 
