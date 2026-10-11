@@ -13,7 +13,7 @@ mcp_servers:
     description: Sandbox AP invoices and payments for Broski (no real money)
     # Prefer remote HTTP for ArmorIQ platform onboarding
     transport: http
-    url: https://temporary-speedy-flint-zx2cl72.vercel.app/api/mcp
+    url: https://broskimcp.vercel.app/api/mcp
     # Local stdio fallback: npm run mcp
 
 policy:
