@@ -6,6 +6,12 @@ import {
   MCP_NAME,
   MCP_VERSION,
 } from "@/lib/mcp/create-invoice-server";
+import {
+  handleArmorIQProxyInvoke,
+  handleStatelessMcpJsonRpc,
+  isArmorIQProxyInvoke,
+  isMcpJsonRpc,
+} from "@/lib/mcp/proxy-compat";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export const runtime = "nodejs";
@@ -15,7 +21,7 @@ const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, Accept, mcp-session-id, Last-Event-ID, mcp-protocol-version",
+    "Content-Type, Accept, mcp-session-id, Last-Event-ID, mcp-protocol-version, X-API-Key, Authorization, X-Armoriq-MCP-Auth, X-CSRG-Proof, X-CSRG-Path, X-CSRG-Value-Digest, X-Request-ID",
   "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
 };
 
@@ -86,6 +92,13 @@ async function handleMcp(req: Request): Promise<Response> {
     );
   }
 
+  // ArmorIQ cloud proxy often POSTs its invoke envelope directly at the MCP URL.
+  if (req.method === "POST" && isArmorIQProxyInvoke(body)) {
+    return withCors(
+      await handleArmorIQProxyInvoke(body as Record<string, unknown>),
+    );
+  }
+
   let session = sessionHeader ? sessions.get(sessionHeader) : undefined;
 
   if (session) {
@@ -131,6 +144,12 @@ async function handleMcp(req: Request): Promise<Response> {
     return withCors(response);
   }
 
+  // Stateless MCP JSON-RPC (tools/list, tools/call) without a prior session —
+  // some proxy paths skip Streamable HTTP session setup.
+  if (req.method === "POST" && isMcpJsonRpc(body)) {
+    return withCors(await handleStatelessMcpJsonRpc(body));
+  }
+
   return withCors(
     Response.json(
       {
@@ -166,7 +185,7 @@ export async function GET(req: Request) {
       version: MCP_VERSION,
       transport: "streamable-http",
       auth: "none",
-      note: "POST JSON-RPC (MCP Streamable HTTP) to this endpoint. Sandbox invoices only.",
+      note: "POST JSON-RPC (MCP Streamable HTTP) or ArmorIQ proxy invoke envelopes. Sandbox invoices only.",
       tools: [
         "list_invoices",
         "get_invoice",
