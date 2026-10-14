@@ -42,5 +42,15 @@ export type RunResponse = {
   planGoal: string;
   planSteps: Array<{ tool: string; args: Record<string, unknown> }>;
   events: VerdictEvent[];
+  /** Ledger snapshot from the same instance that ran tools (Vercel-safe). */
+  invoices?: Array<{
+    id: string;
+    vendor: string;
+    amount: number;
+    currency: "USD";
+    status: "open" | "paid" | "blocked";
+    approved: boolean;
+    note: string;
+  }>;
   enforcementMode: "sdk" | "local" | "proxy";
 };

@@ -97,7 +97,12 @@ export function BroskiApp() {
         const res = await fetch("/api/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scenario, mandate, reset: true }),
+          body: JSON.stringify({
+            scenario,
+            mandate,
+            // Always reset so INV-120 starts unpaid (required for Full demo).
+            reset: true,
+          }),
         });
         const data = (await res.json()) as RunResponse & { error?: string };
         if (!res.ok) {
@@ -105,8 +110,51 @@ export function BroskiApp() {
           return;
         }
         setRun(data);
-        const statusRes = await fetch("/api/status");
-        setStatus(await statusRes.json());
+        // Prefer ledger from the same serverless instance that ran tools.
+        if (data.invoices) {
+          setStatus((prev) =>
+            prev
+              ? { ...prev, invoices: data.invoices!, configured: data.configured }
+              : {
+                  configured: data.configured,
+                  agentId: "Broski",
+                  mcp: "broski-invoice-mcp",
+                  platform: "https://platform.armoriq.ai",
+                  invoices: data.invoices!,
+                },
+          );
+        } else {
+          const statusRes = await fetch("/api/status");
+          setStatus(await statusRes.json());
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    });
+  }
+
+  function resetLedger() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const res = await fetch("/api/invoices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reset: true }),
+        });
+        const data = (await res.json()) as { invoices?: SandboxInvoice[] };
+        setStatus((prev) =>
+          prev
+            ? { ...prev, invoices: data.invoices ?? [] }
+            : {
+                configured: false,
+                agentId: "Broski",
+                mcp: "broski-invoice-mcp",
+                platform: "https://platform.armoriq.ai",
+                invoices: data.invoices ?? [],
+              },
+        );
+        setRun(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
@@ -296,13 +344,25 @@ export function BroskiApp() {
 
           <div className="flex flex-col gap-6">
             <div className="broski-rise broski-panel p-5 md:p-6">
-              <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h2 className="font-[family-name:var(--font-broski-display)] text-2xl text-[var(--broski-ink)]">
                   Sandbox ledger
                 </h2>
-                <Badge variant="outline" className="border-white/15 text-[var(--broski-muted)]">
-                  fake money only
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="border-white/15 text-[var(--broski-muted)]">
+                    fake money only
+                  </Badge>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-white/15 text-[var(--broski-muted)]"
+                    onClick={resetLedger}
+                    disabled={pending}
+                  >
+                    Reset sandbox
+                  </Button>
+                </div>
               </div>
               <div className="space-y-3">
                 {invoices.map((invoice, index) => (

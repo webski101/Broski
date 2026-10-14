@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import {
   IntentMismatchException,
+  InvalidTokenException,
   MCPInvocationException,
   PolicyBlockedException,
   PolicyHoldException,
@@ -11,7 +12,7 @@ import {
   createArmorIQClient,
   isArmorIQConfigured,
 } from "@/lib/armoriq";
-import { resetSandbox } from "@/lib/sandbox/invoices";
+import { listInvoices, resetSandbox } from "@/lib/sandbox/invoices";
 import { buildMandatePlanSteps, scenarioSteps } from "./mandate";
 import { executeSandboxTool } from "./tools";
 import type {
@@ -57,6 +58,51 @@ function planAllowsCall(
   });
 }
 
+function errorName(error: unknown): string {
+  if (error && typeof error === "object" && "name" in error) {
+    return String((error as { name?: string }).name || "");
+  }
+  return "";
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function isPolicyBlockedError(error: unknown): boolean {
+  if (error instanceof PolicyBlockedException) return true;
+  if (errorName(error) === "PolicyBlockedException") return true;
+  const message = errorMessage(error).toLowerCase();
+  return (
+    message.includes("not allowed by policy") ||
+    message.includes("blocked by policy") ||
+    message.includes("policy blocked")
+  );
+}
+
+function isPolicyHoldError(error: unknown): boolean {
+  if (error instanceof PolicyHoldException) return true;
+  return errorName(error) === "PolicyHoldException";
+}
+
+function formatProxyFailure(error: unknown): string {
+  if (error instanceof MCPInvocationException) {
+    const status =
+      typeof error.statusCode === "number" ? ` status=${error.statusCode}` : "";
+    return `MCPInvocationException${status}: ${error.message}`;
+  }
+  const name = errorName(error);
+  const status =
+    error &&
+    typeof error === "object" &&
+    "statusCode" in error &&
+    typeof (error as { statusCode?: unknown }).statusCode === "number"
+      ? ` status=${(error as { statusCode: number }).statusCode}`
+      : "";
+  return `${name || "Error"}${status}: ${errorMessage(error)}`;
+}
+
 function mapArmorIQError(step: RunStepRequest, error: unknown): VerdictEvent {
   if (error instanceof IntentMismatchException) {
     return eventBase(
@@ -66,20 +112,27 @@ function mapArmorIQError(step: RunStepRequest, error: unknown): VerdictEvent {
         `ArmorIQ intent mismatch: ${step.tool} is outside the signed Broski mandate.`,
     );
   }
-  if (error instanceof PolicyBlockedException) {
+  if (isPolicyBlockedError(error)) {
     return eventBase(
       step,
       "block",
-      error.reason || error.message || "ArmorIQ policy blocked this action.",
+      error instanceof PolicyBlockedException
+        ? error.reason || error.message
+        : errorMessage(error) || "ArmorIQ policy blocked this action.",
     );
   }
-  if (error instanceof PolicyHoldException) {
+  if (isPolicyHoldError(error)) {
     return eventBase(
       step,
       "hold",
-      error.message || "ArmorIQ held this action for approval.",
-      error.delegationContext,
+      errorMessage(error) || "ArmorIQ held this action for approval.",
+      error instanceof PolicyHoldException
+        ? error.delegationContext
+        : undefined,
     );
+  }
+  if (error instanceof InvalidTokenException) {
+    return eventBase(step, "error", error.message);
   }
   if (error instanceof MCPInvocationException) {
     return eventBase(
@@ -88,8 +141,7 @@ function mapArmorIQError(step: RunStepRequest, error: unknown): VerdictEvent {
       error.message || "ArmorIQ MCP invocation failed.",
     );
   }
-  const message = error instanceof Error ? error.message : String(error);
-  return eventBase(step, "error", message);
+  return eventBase(step, "error", errorMessage(error));
 }
 
 async function runStepThroughArmorIQ(input: {
@@ -114,7 +166,7 @@ async function runStepThroughArmorIQ(input: {
     return eventBase(
       step,
       "allow",
-      "ArmorIQ verified the signed intent and completed the MCP invoke.",
+      "ArmorIQ verified the signed intent and completed the MCP invoke via proxy.",
       result,
     );
   } catch (error) {
@@ -127,24 +179,38 @@ async function runStepThroughArmorIQ(input: {
       );
     }
 
-    if (error instanceof PolicyBlockedException) {
+    if (isPolicyBlockedError(error)) {
       return eventBase(
         step,
         "block",
-        error.reason || error.message || "ArmorIQ policy blocked this action.",
+        error instanceof PolicyBlockedException
+          ? error.reason || error.message
+          : errorMessage(error) || "ArmorIQ policy blocked this action.",
       );
     }
 
-    if (error instanceof PolicyHoldException) {
+    if (isPolicyHoldError(error)) {
       return eventBase(
         step,
         "hold",
-        error.message || "ArmorIQ held this action for human approval.",
-        error.delegationContext,
+        errorMessage(error) || "ArmorIQ held this action for human approval.",
+        error instanceof PolicyHoldException
+          ? error.delegationContext
+          : undefined,
       );
     }
 
     if (error instanceof MCPInvocationException) {
+      const proxyDetail = formatProxyFailure(error);
+      console.error(
+        `[broski] ArmorIQ proxy invoke failed for ${BROSKI_MCP}.${step.tool}`,
+        {
+          statusCode: error.statusCode,
+          message: error.message,
+          args,
+        },
+      );
+
       // Intent action-name check passed client-side. Also bind against the exact
       // signed plan params (invoice ids / amounts) from capturePlan().
       if (!planAllowsCall(planSteps, step.tool, args)) {
@@ -155,15 +221,31 @@ async function runStepThroughArmorIQ(input: {
         );
       }
 
+      const allowLocal =
+        process.env.ARMORIQ_LOCAL_MCP_FALLBACK !== "0" &&
+        process.env.ARMORIQ_LOCAL_MCP_FALLBACK !== "false";
+
+      if (!allowLocal) {
+        return eventBase(
+          step,
+          "error",
+          `ArmorIQ proxy invoke failed for ${BROSKI_MCP}.${step.tool} (${proxyDetail}). Local MCP fallback disabled.`,
+        );
+      }
+
       const result = await executeSandboxTool(step.tool, args);
       return eventBase(
         step,
         "allow",
-        "ArmorIQ signed-intent check passed. Sandbox MCP ran locally because broski-invoice-mcp is not registered on the ArmorIQ proxy yet — onboard it on platform.armoriq.ai for full proxy routing.",
+        `ArmorIQ signed-intent check passed — executed on sandbox MCP. (Proxy detail: ${proxyDetail})`,
         result,
       );
     }
 
+    console.error(
+      `[broski] Unexpected ArmorIQ error for ${step.tool}:`,
+      formatProxyFailure(error),
+    );
     return mapArmorIQError(step, error);
   }
 }
@@ -190,15 +272,29 @@ export async function runBroskiScenario(input: {
       planGoal: mandate.goal,
       planSteps,
       events: [],
+      invoices: listInvoices(),
       enforcementMode: mode,
     };
   }
 
-  if (input.reset !== false) {
+  // Always reset for full_demo so INV-120 is unpaid every run.
+  const shouldReset = input.reset !== false || input.scenario === "full_demo";
+  if (shouldReset) {
     resetSandbox();
   }
 
   const client = createArmorIQClient();
+
+  // Best-effort: warm MCP metadata from ArmorIQ so proxy routing knows the server.
+  try {
+    await client.loadMcp(BROSKI_MCP);
+  } catch (error) {
+    console.error(
+      `[broski] loadMcp(${BROSKI_MCP}) failed — proxy may not resolve this MCP:`,
+      formatProxyFailure(error),
+    );
+  }
+
   const plan = {
     goal: mandate.goal,
     steps: planSteps.map((step) => ({
@@ -235,6 +331,7 @@ export async function runBroskiScenario(input: {
     planGoal: mandate.goal,
     planSteps,
     events,
+    invoices: listInvoices(),
     enforcementMode: mode,
   };
 }

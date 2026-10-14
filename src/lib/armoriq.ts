@@ -22,6 +22,20 @@ export function createArmorIQClient() {
     agentId: BROSKI_AGENT_ID,
     contextId: process.env.CONTEXT_ID || "broski-hackathon",
     useProduction: process.env.ARMORIQ_ENV !== "development",
+    // Optional overrides — only set when debugging proxy routing.
+    ...(process.env.PROXY_ENDPOINT
+      ? { proxyEndpoint: process.env.PROXY_ENDPOINT }
+      : {}),
+    ...(process.env.IAP_ENDPOINT
+      ? { iapEndpoint: process.env.IAP_ENDPOINT }
+      : {}),
+    ...(process.env.BACKEND_ENDPOINT
+      ? { backendEndpoint: process.env.BACKEND_ENDPOINT }
+      : {}),
+    // Auth for the registered remote MCP (None on platform → authType none).
+    mcpCredentials: {
+      [BROSKI_MCP]: { authType: "none" },
+    },
   });
 }
 
@@ -32,5 +46,6 @@ export function getArmorIQStatus() {
     mcp: BROSKI_MCP,
     platform: "https://platform.armoriq.ai",
     env: process.env.ARMORIQ_ENV || "production",
+    proxyEndpoint: process.env.PROXY_ENDPOINT || "https://proxy.armoriq.ai",
   };
 }
