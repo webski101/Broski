@@ -54,12 +54,30 @@ Live MCP (Streamable HTTP): https://broskimcp.vercel.app/api/mcp
 ## Demo script (2 minutes)
 
 1. Open Broski → confirm ArmorIQ shows **connected**
-2. Run **Full demo**
-3. Show verdict feed:
+2. Click **Reset sandbox** if INV-120 shows paid (Full demo also auto-resets)
+3. Run **Full demo**
+4. Show verdict feed:
    - `pay_invoice INV-120` → **ALLOW**
    - `wire_transfer $50k` → **BLOCK**
-   - `pay_invoice INV-2400` → **BLOCK** (outside signed plan) or **HOLD** if ArmorPay policy is attached
-4. Flash the ArmorIQ platform audit / plan view
+   - `add_payee` → **BLOCK**
+   - `pay_invoice INV-2400` → **BLOCK** (outside signed plan)
+5. Flash the ArmorIQ platform audit / Policy Studio
+
+### Vercel env vars (required)
+
+| Variable | Value |
+| --- | --- |
+| `ARMORIQ_API_KEY` | `ak_live_…` from platform.armoriq.ai |
+| `AGENT_ID` | `d7681f20-2ac7-49db-a8ae-7e1ede22f14b` |
+| `USER_ID` | `broski-operator` |
+| `CONTEXT_ID` | `broski-hackathon` |
+| `ARMORIQ_ENV` | `production` |
+| `ARMORIQ_SESSION_MODE` | `sdk` |
+| `ARMORIQ_LOCAL_MCP_FALLBACK` | `1` (keep demo ALLOW when proxy invoke fails after intent pass) |
+
+Optional: `PROXY_ENDPOINT`, `IAP_ENDPOINT`, `BACKEND_ENDPOINT` (defaults are production ArmorIQ).
+
+**Policy Studio:** allow `pay_invoice`, `get_invoice`, `list_invoices`, `list_trusted_payees` for Broski (or Default Allow). Deny/omit `wire_transfer` and `add_payee`.
 
 ## Rules alignment
 
